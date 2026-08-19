@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lyrics Guess</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #fff; text-align: center; margin: 0; padding: 20px; }
+    .controls { display: flex; gap: 10px; justify-content: center; align-items: center; margin-bottom: 15px; flex-wrap: wrap; }
+    input[type="text"] { width: 320px; padding: 12px; border-radius: 6px; border: 1px solid #334155; font-size: 15px; background: #1e293b; color: #fff; }
+    input[type="number"], select { padding: 12px; border-radius: 6px; border: 1px solid #334155; font-size: 15px; background: #1e293b; color: #fff; }
+    input[type="number"] { width: 80px; }
+    label { font-size: 14px; color: #94a3b8; display: flex; align-items: center; gap: 6px; }
+    button.load-btn { padding: 12px 24px; background: #0284c7; color: white; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; font-weight: bold; }
+    button.load-btn:hover { background: #0369a1; }
+    
+    #status-msg { margin: 10px auto; max-width: 550px; padding: 10px; border-radius: 6px; font-weight: 500; display: none; }
+    .status-checking { background: #334155; color: #38bdf8; }
+    .status-error { background: #450a0a; color: #f87171; border: 1px solid #991b1b; }
+    .status-success { background: #064e3b; color: #34d399; }
+
+    #player-container { margin: 15px auto; max-width: 640px; }
+    
+    .game-box { background: #1e293b; border-radius: 12px; padding: 20px; max-width: 600px; margin: 0 auto; position: relative; }
+    
+    .lyrics-container { 
+      height: 220px; 
+      overflow-y: auto; 
+      border-radius: 8px; 
+      background: #0f172a; 
+      padding: 10px 20px; 
+      margin-bottom: 15px;
+      scroll-behavior: smooth;
+    }
+    
+    .lyric-line { 
+      font-size: 20px; 
+      padding: 12px 10px; 
+      opacity: 0.35; 
+      transition: all 0.25s ease;
+      border-radius: 6px;
+    }
+    
+    .lyric-line.active { 
+      opacity: 1; 
+      font-size: 24px; 
+      font-weight: bold; 
+      background: #1e293b; 
+      color: #38bdf8;
+      border: 1px solid #0284c7;
+    }
+
+    .blank { border-bottom: 3px solid #38bdf8; color: #38bdf8; font-weight: bold; padding: 0 8px; cursor: pointer; }
+    .blank.solved { border-bottom: none; color: #34d399; }
+    .blank.active-blank { background: #0284c7; color: #fff; border-radius: 4px; }
+
+    .options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; min-height: 110px; }
+    button.opt-btn { background: #334155; color: #fff; border: none; padding: 15px; font-size: 18px; border-radius: 8px; cursor: pointer; transition: background 0.15s; }
+    button.opt-btn:hover { background: #475569; }
+    .timer-bar { height: 6px; background: #ef4444; width: 0%; border-radius: 3px; transition: width 0.1s linear; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+
+  <h1>Lyrics Guess</h1>
+  
+  <div class="controls">
+    <input type="text" id="yt-input" placeholder="Paste YouTube link or Video ID..." value="https://www.youtube.com/watch?v=1o2S3s98dTo">
+    
+    <label title="Shift lyrics forward or backward in seconds">
+      Offset (s):
+      <input type="number" id="offset-input" value="0" step="0.5">
+    </label>
+
+    <label>
+      Difficulty:
+      <select id="difficulty-select">
+        <option value="0.25" selected>Easy (25%)</option>
+        <option value="0.50">Medium (50%)</option>
+        <option value="0.75">Hard (75%)</option>
+      </select>
+    </label>
+
+    <button class="load-btn" onclick="startGame()">Start Game</button>
+  </div>
+
+  <div id="status-msg"></div>
+
+  <div id="player-container"><div id="player"></div></div>
+
+  <div class="game-box">
+    <div id="timer-bar" class="timer-bar"></div>
+    <div id="lyrics-container" class="lyrics-container">
+      <div style="padding-top: 80px; opacity: 0.5;">Paste a YouTube song link above to load lyrics!</div>
+    </div>
+    <div id="options-container" class="options-grid"></div>
+  </div>
+
+  <script>
+    let player = null;
+    let gameData = [];
+    let currentSegmentIndex = 0;
+    let activeBlankSubIndex = 0;
+    let isWaitingForAnswer = false;
+    let isFadingOut = false;
+    let fadeInterval = null;
+    let originalVolume = 100;
+    let timerInterval = null;
+    let loopInterval = null;
+
+    var tag = document.createElement('script');
+    tag.src = "https://www.youtube.com/iframe_api";
+    document.head.appendChild(tag);
+
+    function extractVideoId(url) {
+      const regExp = /^.*(?:youtu\.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+      const match = url.trim().match(regExp);
+      return (match && match[1].length === 11) ? match[1] : url.trim();
+    }
+
+    function cleanYouTubeTitle(title) {
+      return title
+        .replace(/[\(\[\{].*?[\)\]\}]/g, '')
+        .replace(/official video|official music video|lyric video|official audio|vevo|hd|4k|sanremo \d+/gi, '')
+        .trim();
+    }
+
+    function parseLRC(lrcText, offsetSec = 0) {
+      const lines = lrcText.split('\n');
+      const result = [];
+      const timeRegex = /\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/;
+
+      for (let line of lines) {
+        const match = line.match(timeRegex);
+        if (match) {
+          const minutes = parseInt(match[1], 10);
+          const seconds = parseInt(match[2], 10);
+          const millis = parseInt(match[3].padEnd(3, '0'), 10);
+          
+          let totalSeconds = (minutes * 60 + seconds + millis / 1000) + offsetSec;
+          if (totalSeconds < 0) totalSeconds = 0;
+
+          const text = match[4].trim();
+
+          if (text.length > 0) {
+            result.push({ time: totalSeconds, text });
+          }
+        }
+      }
+
+      return result.map((item, index) => {
+        const nextItem = result[index + 1];
+        const lyricEndTime = nextItem ? Math.min(nextItem.time, item.time + 6) : item.time + 4;
+        
+        return { 
+          startTime: item.time, 
+          lyricEndTime: lyricEndTime, 
+          pauseTime: lyricEndTime + 1.0, // Fade out during this 1 extra second
+          text: item.text 
+        };
+      });
+    }
+
+    function getDistractors(correctWord, allWords) {
+      const cleanCorrect = correctWord.toLowerCase().replace(/[^\w\u00C0-\u024F]/g, '');
+      const pool = Array.from(new Set(
+        allWords
+          .map(w => w.toLowerCase().replace(/[^\w\u00C0-\u024F]/g, ''))
+          .filter(w => w.length > 2 && w !== cleanCorrect)
+      ));
+      
+      const shuffled = pool.sort(() => 0.5 - Math.random());
+      const options = [cleanCorrect, ...shuffled.slice(0, 3)];
+      return options.sort(() => 0.5 - Math.random());
+    }
+
+    function showStatus(text, type) {
+      const msgEl = document.getElementById('status-msg');
+      msgEl.className = `status-${type}`;
+      msgEl.innerText = text;
+      msgEl.style.display = 'block';
+    }
+
+    async function fetchYouTubeTitle(videoId) {
+      const targetUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
+      
+      try {
+        const res = await fetch(`https://corsproxy.io/?${encodeURIComponent(targetUrl)}`);
+        if (res.ok) {
+          const data = await res.json();
+          return data.title;
+        }
+      } catch (e) {
+        console.warn("Proxy blocked or file:// origin detected, switching to fallback...");
+      }
+
+      const userTitle = prompt("Running locally via file:// prevents auto-fetching title. Please enter Song Title & Artist:");
+      if (!userTitle) throw new Error("Title required to search lyrics.");
+      return userTitle;
+    }
+
+    async function startGame() {
+      const input = document.getElementById('yt-input').value;
+      const offsetValue = parseFloat(document.getElementById('offset-input').value) || 0;
+      const hideRatio = parseFloat(document.getElementById('difficulty-select').value) || 0.25;
+      const videoId = extractVideoId(input);
+
+      clearInterval(timerInterval);
+      clearInterval(loopInterval);
+      clearInterval(fadeInterval);
+      loopInterval = null;
+      isFadingOut = false;
+      document.getElementById('timer-bar').style.width = '0%';
+
+      showStatus("🔍 Getting video info & searching lyrics...", "checking");
+
+      try {
+        const rawTitle = await fetchYouTubeTitle(videoId);
+        const cleanQuery = cleanYouTubeTitle(rawTitle);
+
+        const lrclibRes = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(cleanQuery)}`);
+        const searchResults = await lrclibRes.json();
+
+        const bestMatch = Array.isArray(searchResults) 
+          ? searchResults.find(item => item.syncedLyrics && item.syncedLyrics.length > 0)
+          : null;
+
+        if (!bestMatch) {
+          showStatus(`❌ Inferred title "${cleanQuery}", but synced lyrics weren't found on LRCLIB.`, "error");
+          return;
+        }
+
+        showStatus(`🎵 Found: "${bestMatch.artistName} - ${bestMatch.trackName}"! Starting...`, "success");
+
+        const rawSegments = parseLRC(bestMatch.syncedLyrics, offsetValue);
+        const allWords = rawSegments.flatMap(s => s.text.split(/\s+/));
+
+        gameData = rawSegments.map(item => {
+          const words = item.text.split(/\s+/);
+          const wordCount = words.length;
+          
+          const targetCount = Math.max(1, Math.round(wordCount * hideRatio));
+
+          let candidates = words
+            .map((w, idx) => ({ idx, word: w, clean: w.replace(/[^\w\u00C0-\u024F]/g, '') }))
+            .filter(o => o.clean.length >= 3);
+
+          if (candidates.length === 0) {
+            candidates = words.map((w, idx) => ({ idx, word: w, clean: w.replace(/[^\w\u00C0-\u024F]/g, '') }));
+          }
+
+          const shuffledCandidates = candidates.sort(() => 0.5 - Math.random());
+          const selectedTargets = shuffledCandidates.slice(0, targetCount)
+            .sort((a, b) => a.idx - b.idx);
+
+          const hiddenItems = selectedTargets.map(t => ({
+            wordIndex: t.idx,
+            correct: t.clean,
+            options: getDistractors(t.clean, allWords),
+            solved: false
+          }));
+
+          return {
+            startTime: item.startTime,
+            lyricEndTime: item.lyricEndTime,
+            pauseTime: item.pauseTime,
+            text: item.text,
+            targets: hiddenItems,
+            timeLimit: 5
+          };
+        });
+
+        currentSegmentIndex = 0;
+        activeBlankSubIndex = 0;
+        isWaitingForAnswer = false;
+
+        buildFullLyricsFeed();
+        
+        // --- THE FIX IS HERE ---
+        // Force the first line to highlight and render its options immediately on start
+        highlightActiveLine(currentSegmentIndex); 
+
+        if (!player) {
+          player = new YT.Player('player', {
+            height: '320',
+            width: '580',
+            videoId: videoId,
+            events: { 'onStateChange': onPlayerStateChange }
+          });
+        } else {
+          player.loadVideoById(videoId);
+        }
+
+        setTimeout(() => { document.getElementById('status-msg').style.display = 'none'; }, 3500);
+
+      } catch (err) {
+        showStatus(`⚠️ Error: ${err.message}`, "error");
+      }
+    }
+
+    function buildFullLyricsFeed() {
+      const container = document.getElementById('lyrics-container');
+      container.innerHTML = '';
+
+      gameData.forEach((seg, idx) => {
+        const lineDiv = document.createElement('div');
+        lineDiv.className = 'lyric-line';
+        lineDiv.id = `line-${idx}`;
+
+        const words = seg.text.split(/\s+/);
+        
+        lineDiv.innerHTML = words.map((w, i) => {
+          const targetSubIdx = seg.targets.findIndex(t => t.wordIndex === i);
+          if (targetSubIdx !== -1) {
+            return `<span class="blank" id="blank-${idx}-${targetSubIdx}">___</span>`;
+          }
+          return w;
+        }).join(' ');
+
+        container.appendChild(lineDiv);
+      });
+    }
+
+    function restoreVolume() {
+      clearInterval(fadeInterval);
+      isFadingOut = false;
+      if (player && typeof player.setVolume === 'function') {
+        player.setVolume(originalVolume);
+      }
+    }
+
+    function onPlayerStateChange(event) {
+      if (event.data === YT.PlayerState.PLAYING) {
+        if (isWaitingForAnswer) {
+          player.pauseVideo();
+          return;
+        }
+        if (!isFadingOut && player.getVolume() !== originalVolume) {
+          restoreVolume();
+        }
+        if (!loopInterval) {
+          loopInterval = setInterval(gameLoop, 50);
+        }
+      } else {
+        clearInterval(loopInterval);
+        loopInterval = null;
+      }
+    }
+
+    function gameLoop() {
+      if (!player || isWaitingForAnswer || !gameData.length) return;
+      if (typeof player.getCurrentTime !== 'function') return;
+
+      const currentTime = player.getCurrentTime();
+      const seg = gameData[currentSegmentIndex];
+      const isLineSolved = seg.targets.every(t => t.solved);
+
+      // 1. Natural Advance: If section is solved AND we reached the next section's start time
+      const nextSeg = gameData[currentSegmentIndex + 1];
+      if (nextSeg && currentTime >= (nextSeg.startTime - 0.2)) {
+        if (isLineSolved) {
+          currentSegmentIndex++;
+          activeBlankSubIndex = 0;
+          highlightActiveLine(currentSegmentIndex);
+          return; // Let next loop handle the new segment
+        }
+      }
+
+      // 2. Fade and Pause logic (ONLY if section is NOT solved yet)
+      if (!isLineSolved) {
+        if (currentTime >= seg.pauseTime && !isWaitingForAnswer) {
+          // Time is up: Pause video exactly at endTime + 1s
+          clearInterval(fadeInterval);
+          isFadingOut = false;
+          player.pauseVideo();
+          player.setVolume(0);
+          triggerQuizState(seg);
+        } else if (currentTime >= seg.lyricEndTime && !isFadingOut && !isWaitingForAnswer) {
+          // Start the 1 second fade out
+          startFadeOut();
+        }
+      }
+    }
+
+    function startFadeOut() {
+      isFadingOut = true;
+      let currentVol = player.getVolume();
+      if (currentVol === 0) currentVol = 100; // Safeguard if muted
+      originalVolume = currentVol;
+      
+      const fadeStep = originalVolume / 10; // 10 steps over 1 second
+
+      clearInterval(fadeInterval);
+      fadeInterval = setInterval(() => {
+        currentVol -= fadeStep;
+        if (currentVol <= 0) {
+          currentVol = 0;
+          clearInterval(fadeInterval);
+        }
+        player.setVolume(Math.round(currentVol));
+      }, 100);
+    }
+
+    function highlightActiveLine(index) {
+      document.querySelectorAll('.lyric-line').forEach(el => el.classList.remove('active'));
+
+      const activeEl = document.getElementById(`line-${index}`);
+      if (activeEl) {
+        activeEl.classList.add('active');
+        activeEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
+      updateActiveBlankHighlight();
+      renderOptions();
+    }
+
+    function updateActiveBlankHighlight() {
+      document.querySelectorAll('.blank').forEach(el => el.classList.remove('active-blank'));
+      
+      const seg = gameData[currentSegmentIndex];
+      if (!seg) return;
+
+      const unsolvedIdx = seg.targets.findIndex(t => !t.solved);
+      if (unsolvedIdx !== -1) {
+        activeBlankSubIndex = unsolvedIdx;
+        const blankEl = document.getElementById(`blank-${currentSegmentIndex}-${activeBlankSubIndex}`);
+        if (blankEl) blankEl.classList.add('active-blank');
+      }
+    }
+
+    function renderOptions() {
+      const optsContainer = document.getElementById('options-container');
+      optsContainer.innerHTML = '';
+
+      const seg = gameData[currentSegmentIndex];
+      if (!seg) return;
+
+      const currentTarget = seg.targets[activeBlankSubIndex];
+      if (!currentTarget || currentTarget.solved) return;
+
+      currentTarget.options.forEach(opt => {
+        const btn = document.createElement('button');
+        btn.className = 'opt-btn';
+        btn.innerText = opt;
+        btn.onclick = () => handleAnswer(opt, seg);
+        optsContainer.appendChild(btn);
+      });
+    }
+
+    function triggerQuizState(seg) {
+      isWaitingForAnswer = true;
+      isFadingOut = false;
+
+      if (loopInterval) {
+        clearInterval(loopInterval);
+        loopInterval = null;
+      }
+
+      let timeLeft = seg.timeLimit;
+      const timerBar = document.getElementById('timer-bar');
+
+      clearInterval(timerInterval);
+      timerInterval = setInterval(() => {
+        timeLeft -= 0.1;
+        timerBar.style.width = `${Math.max(0, (timeLeft / seg.timeLimit) * 100)}%`;
+        
+        // Timeout: "If some answers aren't selected... go back to the section"
+        if (timeLeft <= 0) {
+          clearInterval(timerInterval);
+          replaySegment();
+        }
+      }, 100);
+    }
+
+    function handleAnswer(selected, seg) {
+      clearInterval(timerInterval);
+      document.getElementById('timer-bar').style.width = '0%';
+
+      const target = seg.targets[activeBlankSubIndex];
+
+      if (target && selected.toLowerCase() === target.correct.toLowerCase()) {
+        target.solved = true;
+        
+        const blankEl = document.getElementById(`blank-${currentSegmentIndex}-${activeBlankSubIndex}`);
+        if (blankEl) {
+          blankEl.innerText = target.correct;
+          blankEl.classList.add('solved');
+          blankEl.classList.remove('active-blank');
+        }
+
+        const remainingIdx = seg.targets.findIndex(t => !t.solved);
+        
+        if (remainingIdx !== -1) {
+          // More blanks to solve in this section, keep timer going if paused
+          activeBlankSubIndex = remainingIdx;
+          updateActiveBlankHighlight();
+          renderOptions();
+          
+          let timeLeft = seg.timeLimit;
+          const timerBar = document.getElementById('timer-bar');
+          timerInterval = setInterval(() => {
+            timeLeft -= 0.1;
+            timerBar.style.width = `${Math.max(0, (timeLeft / seg.timeLimit) * 100)}%`;
+            if (timeLeft <= 0) {
+              clearInterval(timerInterval);
+              replaySegment();
+            }
+          }, 100);
+          
+        } else {
+          // Line completely solved! "Just keep playing until it reaches the next section. No need to jump"
+          isWaitingForAnswer = false;
+          document.getElementById('options-container').innerHTML = '';
+          restoreVolume();
+          player.playVideo(); // Will continue naturally until it hits nextSeg.startTime
+        }
+
+      } else {
+        // "If the answer is wrong, start over from the start of the section."
+        replaySegment();
+      }
+    }
+
+    function replaySegment() {
+      clearInterval(timerInterval);
+      document.getElementById('timer-bar').style.width = '0%';
+      isWaitingForAnswer = false;
+      
+      restoreVolume();
+
+      // Find the active segment to restart
+      let targetIndex = gameData.findIndex((s, idx) => idx <= currentSegmentIndex && s.targets.some(t => !t.solved));
+      if (targetIndex === -1) targetIndex = currentSegmentIndex;
+
+      currentSegmentIndex = targetIndex;
+      activeBlankSubIndex = 0;
+      highlightActiveLine(currentSegmentIndex);
+
+      const targetSeg = gameData[currentSegmentIndex];
+      const rewoundTime = Math.max(0, targetSeg.startTime - 0.2);
+      player.seekTo(rewoundTime, true);
+      player.playVideo();
+    }
+  </script>
+</body>
+</html>
