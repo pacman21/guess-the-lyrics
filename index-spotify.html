@@ -101,7 +101,8 @@
   <!-- Spotify Web Playback SDK -->
   <script src="https://sdk.scdn.co/spotify-player.js"></script>
 
-  <script>
+
+          <script>
     const CLIENT_ID = '557c5eae0c894039acc79f2fa8d28171';
     const REDIRECT_URI = window.location.origin + window.location.pathname;
     const SCOPES = "streaming user-read-playback-state user-modify-playback-state user-read-private user-read-email";
@@ -412,7 +413,7 @@
         container.appendChild(lineDiv);
       });
     }
-    
+
     function gameLoop() {
       if (isWaitingForAnswer || !gameData.length || !isPlaying) return;
 
@@ -423,13 +424,11 @@
       const isLineSolved = seg.targets.every(t => t.solved);
 
       const nextSeg = gameData[currentSegmentIndex + 1];
-      if (nextSeg && currentTime >= (nextSeg.startTime - 0.2)) {
-        if (isLineSolved) {
-          currentSegmentIndex++;
-          activeBlankSubIndex = 0;
-          highlightActiveLine(currentSegmentIndex);
-          return;
-        }
+      if (nextSeg && currentTime >= nextSeg.startTime) {
+        currentSegmentIndex++;
+        activeBlankSubIndex = 0;
+        highlightActiveLine(currentSegmentIndex);
+        return;
       }
 
       if (!isLineSolved && currentTime >= seg.pauseTime && !isWaitingForAnswer) {
@@ -497,7 +496,7 @@
       }, 100);
     }
 
-    async function handleAnswer(selected, seg) {
+    function handleAnswer(selected, seg) {
       clearInterval(timerInterval);
       document.getElementById('timer-bar').style.width = '0%';
 
@@ -531,10 +530,9 @@
             }
           }, 100);
         } else {
+          // Line fully solved! Clear options, reset waiting flag, and let the gameLoop handle seamless advancement.
           isWaitingForAnswer = false;
           document.getElementById('options-container').innerHTML = '';
-          await playTrackUri(currentTrackUri, Math.floor(getCurrentPositionMs()));
-          if (!loopInterval) loopInterval = setInterval(gameLoop, 100);
         }
       } else {
         replaySegment();
@@ -560,5 +558,7 @@
       if (!loopInterval) loopInterval = setInterval(gameLoop, 100);
     }
   </script>
+      
+
 </body>
 </html>
