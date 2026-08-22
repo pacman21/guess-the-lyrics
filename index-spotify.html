@@ -497,7 +497,7 @@
       }, 100);
     }
 
-        async function handleAnswer(selected, seg) {
+    async function handleAnswer(selected, seg) {
       clearInterval(timerInterval);
       document.getElementById('timer-bar').style.width = '0%';
 
@@ -531,12 +531,9 @@
             }
           }, 100);
         } else {
-          // Line fully solved! Clear options, reset waiting flag, and resume playback.
+          // Line fully solved! Just clear the quiz state and let the song continue seamlessly.
           isWaitingForAnswer = false;
           document.getElementById('options-container').innerHTML = '';
-
-          const resumeMs = Math.max(0, getCurrentPositionMs());
-          await playTrackUri(currentTrackUri, Math.floor(resumeMs));
           if (!loopInterval) loopInterval = setInterval(gameLoop, 100);
         }
       } else {
