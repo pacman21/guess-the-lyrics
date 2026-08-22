@@ -65,7 +65,7 @@
   <h1>Lyrics Guess (Spotify)</h1>
   
   <div class="controls">
-    <input type="text" id="spotify-search-input" placeholder="Search track name & artist..." value="Polynesia Gazelle">
+    <input type="text" id="spotify-search-input" placeholder="Search track name & artist..." value="Blinding Lights The Weeknd">
     
     <label title="Shift lyrics forward or backward in seconds">
       Offset (s):
@@ -102,7 +102,7 @@
   <script src="https://sdk.scdn.co/spotify-player.js"></script>
 
   <script>
-    const CLIENT_ID = '557c5eae0c894039acc79f2fa8d28171'; // <-- Put your Spotify Client ID here
+    const CLIENT_ID = '557c5eae0c894039acc79f2fa8d28171';
     const REDIRECT_URI = window.location.origin + window.location.pathname;
     const SCOPES = "streaming user-read-playback-state user-modify-playback-state user-read-private user-read-email";
 
@@ -116,6 +116,8 @@
     let activeBlankSubIndex = 0;
     let isWaitingForAnswer = false;
     let currentPlaybackPositionMs = 0;
+    let playbackStartTimeEpoch = 0;
+    let playbackStartOffsetMs = 0;
     let timerInterval = null;
     let loopInterval = null;
     let isPlaying = false;
@@ -167,7 +169,6 @@
         }
       }
 
-      // Trigger redirect login
       const verifier = await generateCodeVerifier();
       const challenge = await generateCodeChallenge(verifier);
       localStorage.setItem('spotify_code_verifier', verifier);
@@ -208,10 +209,21 @@
         if (!state) return;
         currentPlaybackPositionMs = state.position;
         isPlaying = !state.paused;
+
+        if (isPlaying) {
+          playbackStartTimeEpoch = Date.now();
+          playbackStartOffsetMs = state.position;
+        }
       });
 
       spotifyPlayer.connect();
     };
+
+    function getCurrentPositionMs() {
+      if (!isPlaying) return currentPlaybackPositionMs;
+      const elapsed = Date.now() - playbackStartTimeEpoch;
+      return playbackStartOffsetMs + elapsed;
+    }
 
     // --- Game Logic ---
     function parseLRC(lrcText, offsetSec = 0) {
@@ -367,7 +379,6 @@
         buildFullLyricsFeed();
         highlightActiveLine(currentSegmentIndex);
 
-        // Start playback from the first segment
         await playTrackUri(currentTrackUri, Math.floor(gameData[0].startTime * 1000));
 
         if (loopInterval) clearInterval(loopInterval);
@@ -401,12 +412,14 @@
         container.appendChild(lineDiv);
       });
     }
-
+    
     function gameLoop() {
       if (isWaitingForAnswer || !gameData.length || !isPlaying) return;
 
-      const currentTime = currentPlaybackPositionMs / 1000;
+      const currentTime = getCurrentPositionMs() / 1000;
       const seg = gameData[currentSegmentIndex];
+      if (!seg) return;
+
       const isLineSolved = seg.targets.every(t => t.solved);
 
       const nextSeg = gameData[currentSegmentIndex + 1];
@@ -520,7 +533,7 @@
         } else {
           isWaitingForAnswer = false;
           document.getElementById('options-container').innerHTML = '';
-          await playTrackUri(currentTrackUri, Math.floor(currentPlaybackPositionMs));
+          await playTrackUri(currentTrackUri, Math.floor(getCurrentPositionMs()));
           if (!loopInterval) loopInterval = setInterval(gameLoop, 100);
         }
       } else {
