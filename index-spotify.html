@@ -65,7 +65,7 @@
   <h1>Lyrics Guess (Spotify)</h1>
   
   <div class="controls">
-    <input type="text" id="spotify-search-input" placeholder="Search track name & artist..." value="Blinding Lights The Weeknd">
+    <input type="text" id="spotify-search-input" placeholder="Search track name & artist..." value="Polynesia Gazelle">
     
     <label title="Shift lyrics forward or backward in seconds">
       Offset (s):
@@ -101,8 +101,7 @@
   <!-- Spotify Web Playback SDK -->
   <script src="https://sdk.scdn.co/spotify-player.js"></script>
 
-
-          <script>
+  <script>
     const CLIENT_ID = '557c5eae0c894039acc79f2fa8d28171';
     const REDIRECT_URI = window.location.origin + window.location.pathname;
     const SCOPES = "streaming user-read-playback-state user-modify-playback-state user-read-private user-read-email";
@@ -423,14 +422,16 @@
 
       const isLineSolved = seg.targets.every(t => t.solved);
 
+      // Only advance to the next line if the current line IS fully solved AND song time has reached the next line
       const nextSeg = gameData[currentSegmentIndex + 1];
-      if (nextSeg && currentTime >= nextSeg.startTime) {
+      if (isLineSolved && nextSeg && currentTime >= nextSeg.startTime) {
         currentSegmentIndex++;
         activeBlankSubIndex = 0;
         highlightActiveLine(currentSegmentIndex);
         return;
       }
 
+      // If time has passed the pause threshold and line IS NOT solved, pause and trigger question
       if (!isLineSolved && currentTime >= seg.pauseTime && !isWaitingForAnswer) {
         pauseSpotify();
         triggerQuizState(seg);
@@ -530,7 +531,6 @@
             }
           }, 100);
         } else {
-          // Line fully solved! Clear options, reset waiting flag, and let the gameLoop handle seamless advancement.
           isWaitingForAnswer = false;
           document.getElementById('options-container').innerHTML = '';
         }
@@ -544,10 +544,7 @@
       document.getElementById('timer-bar').style.width = '0%';
       isWaitingForAnswer = false;
 
-      let targetIndex = gameData.findIndex((s, idx) => idx <= currentSegmentIndex && s.targets.some(t => !t.solved));
-      if (targetIndex === -1) targetIndex = currentSegmentIndex;
-
-      currentSegmentIndex = targetIndex;
+      // Always stick to the current line when replaying due to a miss or timeout
       activeBlankSubIndex = 0;
       highlightActiveLine(currentSegmentIndex);
 
@@ -558,7 +555,8 @@
       if (!loopInterval) loopInterval = setInterval(gameLoop, 100);
     }
   </script>
+  
+          
       
-
 </body>
 </html>
