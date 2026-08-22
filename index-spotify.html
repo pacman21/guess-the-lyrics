@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lyrics Guess - Spotify Edition</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #fff; text-align: center; margin: 0; padding: 20px; }
+    .controls { display: flex; gap: 10px; justify-content: center; align-items: center; margin-bottom: 15px; flex-wrap: wrap; }
+    input[type="text"] { width: 320px; padding: 12px; border-radius: 6px; border: 1px solid #334155; font-size: 15px; background: #1e293b; color: #fff; }
+    input[type="number"], select { padding: 12px; border-radius: 6px; border: 1px solid #334155; font-size: 15px; background: #1e293b; color: #fff; }
+    input[type="number"] { width: 80px; }
+    label { font-size: 14px; color: #94a3b8; display: flex; align-items: center; gap: 6px; }
+    button.load-btn { padding: 12px 24px; background: #1db954; color: white; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; font-weight: bold; }
+    button.load-btn:hover { background: #1aa34a; }
+    
+    #status-msg { margin: 10px auto; max-width: 550px; padding: 10px; border-radius: 6px; font-weight: 500; display: none; }
+    .status-checking { background: #334155; color: #38bdf8; }
+    .status-error { background: #450a0a; color: #f87171; border: 1px solid #991b1b; }
+    .status-success { background: #064e3b; color: #34d399; }
+
+    #player-container { margin: 15px auto; width: 100%; max-width: 640px; }
+    
+    .game-box { background: #1e293b; border-radius: 12px; padding: 20px; max-width: 600px; margin: 0 auto; position: relative; }
+    
+    .lyrics-container { 
+      height: 220px; 
+      overflow-y: auto; 
+      border-radius: 8px; 
+      background: #0f172a; 
+      padding: 10px 20px; 
+      margin-bottom: 15px;
+      scroll-behavior: smooth;
+    }
+    
+    .lyric-line { 
+      font-size: 20px; 
+      padding: 12px 10px; 
+      opacity: 0.35; 
+      transition: all 0.25s ease;
+      border-radius: 6px;
+    }
+    
+    .lyric-line.active { 
+      opacity: 1; 
+      font-size: 24px; 
+      font-weight: bold; 
+      background: #1e293b; 
+      color: #38bdf8;
+      border: 1px solid #0284c7;
+    }
+
+    .blank { border-bottom: 3px solid #38bdf8; color: #38bdf8; font-weight: bold; padding: 0 8px; cursor: pointer; }
+    .blank.solved { border-bottom: none; color: #34d399; }
+    .blank.active-blank { background: #0284c7; color: #fff; border-radius: 4px; }
+
+    .options-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; min-height: 110px; }
+    button.opt-btn { background: #334155; color: #fff; border: none; padding: 15px; font-size: 18px; border-radius: 8px; cursor: pointer; transition: background 0.15s; }
+    button.opt-btn:hover { background: #475569; }
+    .timer-bar { height: 6px; background: #ef4444; width: 0%; border-radius: 3px; transition: width 0.1s linear; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+
+  <h1>Lyrics Guess (Spotify)</h1>
+  
+  <div class="controls">
+    <input type="text" id="spotify-search-input" placeholder="Search track name & artist..." value="Polynesia Gazelle">
+    
+    <label title="Shift lyrics forward or backward in seconds">
+      Offset (s):
+      <input type="number" id="offset-input" value="0" step="0.5">
+    </label>
+
+    <label>
+      Difficulty:
+      <select id="difficulty-select">
+        <option value="0.25" selected>Easy (25%)</option>
+        <option value="0.50">Medium (50%)</option>
+        <option value="0.75">Hard (75%)</option>
+      </select>
+    </label>
+
+    <button class="load-btn" onclick="startGame()">Start Game</button>
+  </div>
+
+  <div id="status-msg"></div>
+
+  <div id="player-container">
+    <div id="spotify-status" style="font-size: 14px; color: #94a3b8; padding: 10px;">Connecting to Spotify Player...</div>
+  </div>
+
+  <div class="game-box">
+    <div id="timer-bar" class="timer-bar"></div>
+    <div id="lyrics-container" class="lyrics-container">
+      <div style="padding-top: 80px; opacity: 0.5;">Search a song above to load lyrics & play!</div>
+    </div>
+    <div id="options-container" class="options-grid"></div>
+  </div>
+
+  <!-- Spotify Web Playback SDK -->
+  <script src="https://sdk.scdn.co/spotify-player.js"></script>
+
+  <script>
+    const CLIENT_ID = 'YOUR_SPOTIFY_CLIENT_ID'; // <-- Put your Spotify Client ID here
+    const REDIRECT_URI = window.location.origin + window.location.pathname;
+    const SCOPES = "streaming user-read-playback-state user-modify-playback-state user-read-private user-read-email";
+
+    let accessToken = null;
+    let spotifyPlayer = null;
+    let deviceId = null;
+    let currentTrackUri = null;
+
+    let gameData = [];
+    let currentSegmentIndex = 0;
+    let activeBlankSubIndex = 0;
+    let isWaitingForAnswer = false;
+    let currentPlaybackPositionMs = 0;
+    let timerInterval = null;
+    let loopInterval = null;
+    let isPlaying = false;
+
+    // --- PKCE Authentication Flow Setup ---
+    async function generateCodeVerifier() {
+      const array = new Uint8Array(32);
+      window.crypto.getRandomValues(array);
+      return btoa(String.fromCharCode.apply(null, array)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
+    async function generateCodeChallenge(verifier) {
+      const data = new TextEncoder().encode(verifier);
+      const digest = await window.crypto.subtle.digest('SHA-256', data);
+      return btoa(String.fromCharCode.apply(null, new Uint8Array(digest))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    }
+
+    async function handleAuthCheck() {
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get('code');
+      const storedToken = localStorage.getItem('spotify_access_token');
+      
+      if (storedToken) {
+        accessToken = storedToken;
+        return;
+      }
+
+      if (code) {
+        const verifier = localStorage.getItem('spotify_code_verifier');
+        const body = new URLSearchParams({
+          client_id: CLIENT_ID,
+          grant_type: 'authorization_code',
+          code: code,
+          redirect_uri: REDIRECT_URI,
+          code_verifier: verifier,
+        });
+
+        const res = await fetch('https://accounts.spotify.com/api/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: body
+        });
+        const data = await res.json();
+        if (data.access_token) {
+          accessToken = data.access_token;
+          localStorage.setItem('spotify_access_token', accessToken);
+          window.history.replaceState({}, document.title, window.location.pathname);
+          return;
+        }
+      }
+
+      // Trigger redirect login
+      const verifier = await generateCodeVerifier();
+      const challenge = await generateCodeChallenge(verifier);
+      localStorage.setItem('spotify_code_verifier', verifier);
+
+      const authUrl = new URL('https://accounts.spotify.com/authorize');
+      authUrl.searchParams.append('client_id', CLIENT_ID);
+      authUrl.searchParams.append('response_type', 'code');
+      authUrl.searchParams.append('redirect_uri', REDIRECT_URI);
+      authUrl.searchParams.append('code_challenge_method', 'S256');
+      authUrl.searchParams.append('code_challenge', challenge);
+      authUrl.searchParams.append('scope', SCOPES);
+
+      window.location.href = authUrl.toString();
+    }
+
+    // --- Spotify SDK Initialization ---
+    window.onSpotifyWebPlaybackSDKReady = async () => {
+      await handleAuthCheck();
+      if (!accessToken) return;
+
+      spotifyPlayer = new Spotify.Player({
+        name: 'Lyrics Guess Game Player',
+        getOAuthToken: cb => { cb(accessToken); },
+        volume: 0.8
+      });
+
+      spotifyPlayer.addListener('ready', ({ device_id }) => {
+        deviceId = device_id;
+        document.getElementById('spotify-status').innerText = "✅ Connected to Spotify Player!";
+        document.getElementById('spotify-status').style.color = "#34d399";
+      });
+
+      spotifyPlayer.addListener('not_ready', ({ device_id }) => {
+        document.getElementById('spotify-status').innerText = "⚠️ Spotify Device went offline.";
+      });
+
+      spotifyPlayer.addListener('player_state_changed', state => {
+        if (!state) return;
+        currentPlaybackPositionMs = state.position;
+        isPlaying = !state.paused;
+      });
+
+      spotifyPlayer.connect();
+    };
+
+    // --- Game Logic ---
+    function parseLRC(lrcText, offsetSec = 0) {
+      const lines = lrcText.split('\n');
+      const result = [];
+      const timeRegex = /\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)/;
+
+      for (let line of lines) {
+        const match = line.match(timeRegex);
+        if (match) {
+          const minutes = parseInt(match[1], 10);
+          const seconds = parseInt(match[2], 10);
+          const millis = parseInt(match[3].padEnd(3, '0'), 10);
+          
+          let totalSeconds = (minutes * 60 + seconds + millis / 1000) + offsetSec;
+          if (totalSeconds < 0) totalSeconds = 0;
+
+          const text = match[4].trim();
+          if (text.length > 0) result.push({ time: totalSeconds, text });
+        }
+      }
+
+      return result.map((item, index) => {
+        const nextItem = result[index + 1];
+        const lyricEndTime = nextItem ? Math.min(nextItem.time, item.time + 6) : item.time + 4;
+        
+        return { 
+          startTime: item.time, 
+          lyricEndTime: lyricEndTime, 
+          pauseTime: lyricEndTime + 1.0,
+          text: item.text 
+        };
+      });
+    }
+
+    function getDistractors(correctWord, allWords) {
+      const cleanCorrect = correctWord.toLowerCase().replace(/[^\w\u00C0-\u024F]/g, '');
+      const pool = Array.from(new Set(
+        allWords
+          .map(w => w.toLowerCase().replace(/[^\w\u00C0-\u024F]/g, ''))
+          .filter(w => w.length > 2 && w !== cleanCorrect)
+      ));
+      const shuffled = pool.sort(() => 0.5 - Math.random());
+      return [cleanCorrect, ...shuffled.slice(0, 3)].sort(() => 0.5 - Math.random());
+    }
+
+    function showStatus(text, type) {
+      const msgEl = document.getElementById('status-msg');
+      msgEl.className = `status-${type}`;
+      msgEl.innerText = text;
+      msgEl.style.display = 'block';
+    }
+
+    async function searchSpotifyTrack(query) {
+      const res = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=1`, {
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+      const data = await res.json();
+      const track = data.tracks?.items?.[0];
+      if (!track) throw new Error("Track not found on Spotify.");
+      return track;
+    }
+
+    async function playTrackUri(uri, positionMs = 0) {
+      await fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId}`, {
+        method: 'PUT',
+        headers: { 
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ uris: [uri], position_ms: positionMs })
+      });
+    }
+
+    async function pauseSpotify() {
+      await fetch(`https://api.spotify.com/v1/me/player/pause?device_id=${deviceId}`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${accessToken}` }
+      });
+    }
+
+    async function startGame() {
+      if (!deviceId) {
+        alert("Spotify player is not ready yet. Please wait a moment or verify your Spotify Premium account is active.");
+        return;
+      }
+
+      const searchQuery = document.getElementById('spotify-search-input').value;
+      const offsetValue = parseFloat(document.getElementById('offset-input').value) || 0;
+      const hideRatio = parseFloat(document.getElementById('difficulty-select').value) || 0.25;
+
+      clearInterval(timerInterval);
+      clearInterval(loopInterval);
+      document.getElementById('timer-bar').style.width = '0%';
+
+      showStatus("🔍 Searching track & fetching sync lyrics...", "checking");
+
+      try {
+        const track = await searchSpotifyTrack(searchQuery);
+        currentTrackUri = track.uri;
+        const cleanQuery = `${track.artists[0].name} ${track.name}`;
+
+        const lrclibRes = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(cleanQuery)}`);
+        const searchResults = await lrclibRes.json();
+        const bestMatch = Array.isArray(searchResults) 
+          ? searchResults.find(item => item.syncedLyrics && item.syncedLyrics.length > 0)
+          : null;
+
+        if (!bestMatch) {
+          showStatus(`❌ Found track on Spotify, but synced lyrics weren't found on LRCLIB.`, "error");
+          return;
+        }
+
+        showStatus(`🎵 Found: "${track.artists[0].name} - ${track.name}"! Starting...`, "success");
+
+        const rawSegments = parseLRC(bestMatch.syncedLyrics, offsetValue);
+        const allWords = rawSegments.flatMap(s => s.text.split(/\s+/));
+
+        gameData = rawSegments.map(item => {
+          const words = item.text.split(/\s+/);
+          const targetCount = Math.max(1, Math.round(words.length * hideRatio));
+          
+          let candidates = words
+            .map((w, idx) => ({ idx, word: w, clean: w.replace(/[^\w\u00C0-\u024F]/g, '') }))
+            .filter(o => o.clean.length >= 3);
+
+          if (candidates.length === 0) {
+            candidates = words.map((w, idx) => ({ idx, word: w, clean: w.replace(/[^\w\u00C0-\u024F]/g, '') }));
+          }
+
+          const selectedTargets = candidates.sort(() => 0.5 - Math.random()).slice(0, targetCount)
+            .sort((a, b) => a.idx - b.idx);
+
+          return {
+            startTime: item.startTime,
+            lyricEndTime: item.lyricEndTime,
+            pauseTime: item.pauseTime,
+            text: item.text,
+            targets: selectedTargets.map(t => ({
+              wordIndex: t.idx,
+              correct: t.clean,
+              options: getDistractors(t.clean, allWords),
+              solved: false
+            })),
+            timeLimit: 5
+          };
+        });
+
+        currentSegmentIndex = 0;
+        activeBlankSubIndex = 0;
+        isWaitingForAnswer = false;
+
+        buildFullLyricsFeed();
+        highlightActiveLine(currentSegmentIndex);
+
+        // Start playback from the first segment
+        await playTrackUri(currentTrackUri, Math.floor(gameData[0].startTime * 1000));
+
+        if (loopInterval) clearInterval(loopInterval);
+        loopInterval = setInterval(gameLoop, 100);
+
+        setTimeout(() => { document.getElementById('status-msg').style.display = 'none'; }, 3500);
+
+      } catch (err) {
+        showStatus(`⚠️ Error: ${err.message}`, "error");
+      }
+    }
+
+    function buildFullLyricsFeed() {
+      const container = document.getElementById('lyrics-container');
+      container.innerHTML = '';
+
+      gameData.forEach((seg, idx) => {
+        const lineDiv = document.createElement('div');
+        lineDiv.className = 'lyric-line';
+        lineDiv.id = `line-${idx}`;
+
+        const words = seg.text.split(/\s+/);
+        lineDiv.innerHTML = words.map((w, i) => {
+          const targetSubIdx = seg.targets.findIndex(t => t.wordIndex === i);
+          if (targetSubIdx !== -1) {
+            return `<span class="blank" id="blank-${idx}-${targetSubIdx}">___</span>`;
+          }
+          return w;
+        }).join(' ');
+
+        container.appendChild(lineDiv);
+      });
+    }
+
+    function gameLoop() {
+      if (isWaitingForAnswer || !gameData.length || !isPlaying) return;
+
+      const currentTime = currentPlaybackPositionMs / 1000;
+      const seg = gameData[currentSegmentIndex];
+      const isLineSolved = seg.targets.every(t => t.solved);
+
+      const nextSeg = gameData[currentSegmentIndex + 1];
+      if (nextSeg && currentTime >= (nextSeg.startTime - 0.2)) {
+        if (isLineSolved) {
+          currentSegmentIndex++;
+          activeBlankSubIndex = 0;
+          highlightActiveLine(currentSegmentIndex);
+          return;
+        }
+      }
+
+      if (!isLineSolved && currentTime >= seg.pauseTime && !isWaitingForAnswer) {
+        pauseSpotify();
+        triggerQuizState(seg);
+      }
+    }
+
+    function highlightActiveLine(index) {
+      document.querySelectorAll('.lyric-line').forEach(el => el.classList.remove('active'));
+      const activeEl = document.getElementById(`line-${index}`);
+      if (activeEl) {
+        activeEl.classList.add('active');
+        activeEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      updateActiveBlankHighlight();
+      renderOptions();
+    }
+
+    function updateActiveBlankHighlight() {
+      document.querySelectorAll('.blank').forEach(el => el.classList.remove('active-blank'));
+      const seg = gameData[currentSegmentIndex];
+      if (!seg) return;
+
+      const unsolvedIdx = seg.targets.findIndex(t => !t.solved);
+      if (unsolvedIdx !== -1) {
+        activeBlankSubIndex = unsolvedIdx;
+        const blankEl = document.getElementById(`blank-${currentSegmentIndex}-${activeBlankSubIndex}`);
+        if (blankEl) blankEl.classList.add('active-blank');
+      }
+    }
+
+    function renderOptions() {
+      const optsContainer = document.getElementById('options-container');
+      optsContainer.innerHTML = '';
+
+      const seg = gameData[currentSegmentIndex];
+      if (!seg) return;
+
+      const currentTarget = seg.targets[activeBlankSubIndex];
+      if (!currentTarget || currentTarget.solved) return;
+
+      currentTarget.options.forEach(opt => {
+        const btn = document.createElement('button');
+        btn.className = 'opt-btn';
+        btn.innerText = opt;
+        btn.onclick = () => handleAnswer(opt, seg);
+        optsContainer.appendChild(btn);
+      });
+    }
+
+    function triggerQuizState(seg) {
+      isWaitingForAnswer = true;
+      let timeLeft = seg.timeLimit;
+      const timerBar = document.getElementById('timer-bar');
+
+      clearInterval(timerInterval);
+      timerInterval = setInterval(() => {
+        timeLeft -= 0.1;
+        timerBar.style.width = `${Math.max(0, (timeLeft / seg.timeLimit) * 100)}%`;
+        if (timeLeft <= 0) {
+          clearInterval(timerInterval);
+          replaySegment();
+        }
+      }, 100);
+    }
+
+    async function handleAnswer(selected, seg) {
+      clearInterval(timerInterval);
+      document.getElementById('timer-bar').style.width = '0%';
+
+      const target = seg.targets[activeBlankSubIndex];
+
+      if (target && selected.toLowerCase() === target.correct.toLowerCase()) {
+        target.solved = true;
+        
+        const blankEl = document.getElementById(`blank-${currentSegmentIndex}-${activeBlankSubIndex}`);
+        if (blankEl) {
+          blankEl.innerText = target.correct;
+          blankEl.classList.add('solved');
+          blankEl.classList.remove('active-blank');
+        }
+
+        const remainingIdx = seg.targets.findIndex(t => !t.solved);
+        
+        if (remainingIdx !== -1) {
+          activeBlankSubIndex = remainingIdx;
+          updateActiveBlankHighlight();
+          renderOptions();
+          
+          let timeLeft = seg.timeLimit;
+          const timerBar = document.getElementById('timer-bar');
+          timerInterval = setInterval(() => {
+            timeLeft -= 0.1;
+            timerBar.style.width = `${Math.max(0, (timeLeft / seg.timeLimit) * 100)}%`;
+            if (timeLeft <= 0) {
+              clearInterval(timerInterval);
+              replaySegment();
+            }
+          }, 100);
+        } else {
+          isWaitingForAnswer = false;
+          document.getElementById('options-container').innerHTML = '';
+          await playTrackUri(currentTrackUri, Math.floor(currentPlaybackPositionMs));
+          if (!loopInterval) loopInterval = setInterval(gameLoop, 100);
+        }
+      } else {
+        replaySegment();
+      }
+    }
+
+    async function replaySegment() {
+      clearInterval(timerInterval);
+      document.getElementById('timer-bar').style.width = '0%';
+      isWaitingForAnswer = false;
+
+      let targetIndex = gameData.findIndex((s, idx) => idx <= currentSegmentIndex && s.targets.some(t => !t.solved));
+      if (targetIndex === -1) targetIndex = currentSegmentIndex;
+
+      currentSegmentIndex = targetIndex;
+      activeBlankSubIndex = 0;
+      highlightActiveLine(currentSegmentIndex);
+
+      const targetSeg = gameData[currentSegmentIndex];
+      const rewoundMs = Math.max(0, (targetSeg.startTime - 0.2) * 1000);
+      
+      await playTrackUri(currentTrackUri, Math.floor(rewoundMs));
+      if (!loopInterval) loopInterval = setInterval(gameLoop, 100);
+    }
+  </script>
+</body>
+</html>
