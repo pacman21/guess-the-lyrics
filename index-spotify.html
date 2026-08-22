@@ -497,7 +497,7 @@
       }, 100);
     }
 
-    function handleAnswer(selected, seg) {
+        async function handleAnswer(selected, seg) {
       clearInterval(timerInterval);
       document.getElementById('timer-bar').style.width = '0%';
 
@@ -531,8 +531,13 @@
             }
           }, 100);
         } else {
+          // Line fully solved! Clear options, reset waiting flag, and resume playback.
           isWaitingForAnswer = false;
           document.getElementById('options-container').innerHTML = '';
+
+          const resumeMs = Math.max(0, getCurrentPositionMs());
+          await playTrackUri(currentTrackUri, Math.floor(resumeMs));
+          if (!loopInterval) loopInterval = setInterval(gameLoop, 100);
         }
       } else {
         replaySegment();
@@ -544,7 +549,6 @@
       document.getElementById('timer-bar').style.width = '0%';
       isWaitingForAnswer = false;
 
-      // Always stick to the current line when replaying due to a miss or timeout
       activeBlankSubIndex = 0;
       highlightActiveLine(currentSegmentIndex);
 
@@ -554,6 +558,7 @@
       await playTrackUri(currentTrackUri, Math.floor(rewoundMs));
       if (!loopInterval) loopInterval = setInterval(gameLoop, 100);
     }
+
   </script>
   
           
