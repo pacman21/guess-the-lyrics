@@ -511,8 +511,34 @@
       }
 
       if (!isLineSolved && currentTime >= seg.pauseTime && !isWaitingForAnswer) {
-        pauseSpotify();
+        pauseSpotify().then(() => {
+          isPlaying = false;
+        });
         triggerQuizState(seg);
+      }
+    }
+
+    async function replaySegment() {
+      clearInterval(timerInterval);
+      document.getElementById('timer-bar').style.width = '0%';
+      isWaitingForAnswer = false;
+
+      activeBlankSubIndex = 0;
+      highlightActiveLine(currentSegmentIndex);
+
+      const targetSeg = gameData[currentSegmentIndex];
+      const rewoundMs = Math.max(0, (targetSeg.startTime - 0.2) * 1000);
+      
+      logDebug(`Replaying from ${Math.floor(rewoundMs)}ms`);
+
+      try {
+        await playTrackUri(currentTrackUri, Math.floor(rewoundMs));
+        isPlaying = true;
+        playbackStartTimeEpoch = Date.now();
+        playbackStartOffsetMs = rewoundMs;
+        if (!loopInterval) loopInterval = setInterval(gameLoop, 100);
+      } catch (err) {
+        logDebug("Replay error: " + err.message, true);
       }
     }
 
@@ -616,21 +642,6 @@
       } else {
         replaySegment();
       }
-    }
-
-    async function replaySegment() {
-      clearInterval(timerInterval);
-      document.getElementById('timer-bar').style.width = '0%';
-      isWaitingForAnswer = false;
-
-      activeBlankSubIndex = 0;
-      highlightActiveLine(currentSegmentIndex);
-
-      const targetSeg = gameData[currentSegmentIndex];
-      const rewoundMs = Math.max(0, (targetSeg.startTime - 0.2) * 1000);
-      
-      await playTrackUri(currentTrackUri, Math.floor(rewoundMs));
-      if (!loopInterval) loopInterval = setInterval(gameLoop, 100);
     }
   </script>
 </body>
