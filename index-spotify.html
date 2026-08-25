@@ -620,6 +620,7 @@
         const remainingIdx = seg.targets.findIndex(t => !t.solved);
         
         if (remainingIdx !== -1) {
+          // More blanks left in this same line
           activeBlankSubIndex = remainingIdx;
           updateActiveBlankHighlight();
           renderOptions();
@@ -635,14 +636,22 @@
             }
           }, 100);
         } else {
+          // Line fully solved! 
           isWaitingForAnswer = false;
           document.getElementById('options-container').innerHTML = '';
+          
+          // CRITICAL: Advance to the next line so it doesn't get stuck here
+          currentSegmentIndex++;
+          activeBlankSubIndex = 0;
+          highlightActiveLine(currentSegmentIndex);
+
           if (!loopInterval) loopInterval = setInterval(gameLoop, 100);
         }
       } else {
         replaySegment();
       }
     }
+
   </script>
 </body>
 </html>
