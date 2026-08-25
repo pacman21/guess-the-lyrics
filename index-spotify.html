@@ -65,7 +65,7 @@
   <h1>Lyrics Guess (Spotify)</h1>
   
   <div class="controls">
-    <input type="text" id="spotify-search-input" placeholder="Search track name & artist..." value="Antartide Pinguini Tattici">
+    <input type="text" id="spotify-search-input" placeholder="Search track name & artist..." value="Blinding Lights The Weeknd">
     
     <label title="Shift lyrics forward or backward in seconds">
       Offset (s):
@@ -422,7 +422,6 @@
 
       const isLineSolved = seg.targets.every(t => t.solved);
 
-      // Only advance to the next line if the current line IS fully solved AND song time has reached the next line
       const nextSeg = gameData[currentSegmentIndex + 1];
       if (isLineSolved && nextSeg && currentTime >= nextSeg.startTime) {
         currentSegmentIndex++;
@@ -431,7 +430,6 @@
         return;
       }
 
-      // If time has passed the pause threshold and line IS NOT solved, pause and trigger question
       if (!isLineSolved && currentTime >= seg.pauseTime && !isWaitingForAnswer) {
         pauseSpotify();
         triggerQuizState(seg);
@@ -531,7 +529,7 @@
             }
           }, 100);
         } else {
-          // Line fully solved! Just clear the quiz state and let the song continue seamlessly.
+          // Line fully solved! Clear options and let the song keep playing seamlessly without network delays.
           isWaitingForAnswer = false;
           document.getElementById('options-container').innerHTML = '';
           if (!loopInterval) loopInterval = setInterval(gameLoop, 100);
@@ -555,10 +553,6 @@
       await playTrackUri(currentTrackUri, Math.floor(rewoundMs));
       if (!loopInterval) loopInterval = setInterval(gameLoop, 100);
     }
-
   </script>
-  
-          
-      
 </body>
 </html>
