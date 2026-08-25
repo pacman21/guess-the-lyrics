@@ -58,16 +58,33 @@
     button.opt-btn { background: #334155; color: #fff; border: none; padding: 15px; font-size: 18px; border-radius: 8px; cursor: pointer; transition: background 0.15s; }
     button.opt-btn:hover { background: #475569; }
     .timer-bar { height: 6px; background: #ef4444; width: 0%; border-radius: 3px; transition: width 0.1s linear; margin-bottom: 10px; }
+
+    /* On-screen Mobile Debug Box */
+    .debug-box {
+      max-width: 600px;
+      margin: 20px auto;
+      background: #020617;
+      border: 1px solid #1e293b;
+      border-radius: 8px;
+      padding: 10px;
+      text-align: left;
+      font-family: monospace;
+      font-size: 12px;
+      color: #38bdf8;
+      height: 120px;
+      overflow-y: auto;
+    }
+    .debug-box h4 { margin: 0 0 5px 0; color: #94a3b8; font-size: 11px; text-transform: uppercase; }
   </style>
 </head>
-<body>
+<body onclick="initAudioContextOnTouch()">
 
   <h1>Lyrics Guess (Spotify)</h1>
   
   <div class="controls">
-    <input type="text" id="spotify-search-input" placeholder="Search track name & artist..." value="Blinding Lights The Weeknd">
+    <input type="text" id="spotify-search-input" value="Blinding Lights The Weeknd">
     
-    <label title="Shift lyrics forward or backward in seconds">
+    <label>
       Offset (s):
       <input type="number" id="offset-input" value="0" step="0.5">
     </label>
@@ -98,10 +115,30 @@
     <div id="options-container" class="options-grid"></div>
   </div>
 
+  <!-- On-Screen Console for Mobile -->
+  <div class="debug-box">
+    <h4>Mobile Debug Log</h4>
+    <div id="debug-log">Page loaded. Waiting for Spotify SDK...<br></div>
+  </div>
+
   <!-- Spotify Web Playback SDK -->
   <script src="https://sdk.scdn.co/spotify-player.js"></script>
 
   <script>
+    function logDebug(msg, isError = false) {
+      const box = document.getElementById('debug-log');
+      const time = new Date().toLocaleTimeString();
+      box.innerHTML += `<span style="color: ${isError ? '#f87171' : '#38bdf8'}">[${time}] ${msg}</span><br>`;
+      box.scrollTop = box.scrollHeight;
+    }
+
+    // Override console.error/log so we catch everything
+    const originalConsoleError = console.error;
+    console.error = function(...args) {
+      logDebug("ERR: " + args.join(' '), true);
+      originalConsoleError.apply(console, args);
+    };
+
     const CLIENT_ID = '557c5eae0c894039acc79f2fa8d28171';
     const REDIRECT_URI = window.location.origin + window.location.pathname;
     const SCOPES = "streaming user-read-playback-state user-modify-playback-state user-read-private user-read-email";
@@ -121,6 +158,13 @@
     let timerInterval = null;
     let loopInterval = null;
     let isPlaying = false;
+    let hasInteracted = false;
+
+    function initAudioContextOnTouch() {
+      if (hasInteracted) return;
+      hasInteracted = true;
+      logDebug("User interaction registered (touch/click).");
+    }
 
     // --- PKCE Authentication Flow Setup ---
     async function generateCodeVerifier() {
@@ -142,10 +186,12 @@
       
       if (storedToken) {
         accessToken = storedToken;
+        logDebug("Found stored access token.");
         return;
       }
 
       if (code) {
+        logDebug("Found authorization code, exchanging for token...");
         const verifier = localStorage.getItem('spotify_code_verifier');
         const body = new URLSearchParams({
           client_id: CLIENT_ID,
@@ -155,20 +201,28 @@
           code_verifier: verifier,
         });
 
-        const res = await fetch('https://accounts.spotify.com/api/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: body
-        });
-        const data = await res.json();
-        if (data.access_token) {
-          accessToken = data.access_token;
-          localStorage.setItem('spotify_access_token', accessToken);
-          window.history.replaceState({}, document.title, window.location.pathname);
-          return;
+        try {
+          const res = await fetch('https://accounts.spotify.com/api/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: body
+          });
+          const data = await res.json();
+          if (data.access_token) {
+            accessToken = data.access_token;
+            localStorage.setItem('spotify_access_token', accessToken);
+            window.history.replaceState({}, document.title, window.location.pathname);
+            logDebug("Token acquired successfully!");
+            return;
+          } else {
+            logDebug("Token exchange failed: " + JSON.stringify(data), true);
+          }
+        } catch (e) {
+          logDebug("Token fetch error: " + e.message, true);
         }
       }
 
+      logDebug("Redirecting to Spotify login...");
       const verifier = await generateCodeVerifier();
       const challenge = await generateCodeChallenge(verifier);
       localStorage.setItem('spotify_code_verifier', verifier);
@@ -186,9 +240,14 @@
 
     // --- Spotify SDK Initialization ---
     window.onSpotifyWebPlaybackSDKReady = async () => {
+      logDebug("Spotify SDK Ready callback triggered.");
       await handleAuthCheck();
-      if (!accessToken) return;
+      if (!accessToken) {
+        logDebug("No access token available, aborting player init.", true);
+        return;
+      }
 
+      logDebug("Initializing Spotify Player instance...");
       spotifyPlayer = new Spotify.Player({
         name: 'Lyrics Guess Game Player',
         getOAuthToken: cb => { cb(accessToken); },
@@ -197,12 +256,31 @@
 
       spotifyPlayer.addListener('ready', ({ device_id }) => {
         deviceId = device_id;
+        logDebug(`Player Ready! Device ID: ${device_id}`);
         document.getElementById('spotify-status').innerText = "✅ Connected to Spotify Player!";
         document.getElementById('spotify-status').style.color = "#34d399";
       });
 
       spotifyPlayer.addListener('not_ready', ({ device_id }) => {
+        logDebug(`Device ID gone offline: ${device_id}`, true);
         document.getElementById('spotify-status').innerText = "⚠️ Spotify Device went offline.";
+      });
+
+      spotifyPlayer.addListener('initialization_error', ({ message }) => {
+        logDebug(`Init Error: ${message}`, true);
+      });
+
+      spotifyPlayer.addListener('authentication_error', ({ message }) => {
+        logDebug(`Auth Error (Check Premium/Token): ${message}`, true);
+        localStorage.removeItem('spotify_access_token');
+      });
+
+      spotifyPlayer.addListener('account_error', ({ message }) => {
+        logDebug(`Account Error (Requires Premium?): ${message}`, true);
+      });
+
+      spotifyPlayer.addListener('playback_error', ({ message }) => {
+        logDebug(`Playback Error: ${message}`, true);
       });
 
       spotifyPlayer.addListener('player_state_changed', state => {
@@ -216,7 +294,9 @@
         }
       });
 
-      spotifyPlayer.connect();
+      logDebug("Calling player.connect()...");
+      const connected = await spotifyPlayer.connect();
+      logDebug(`Connect result: ${connected}`);
     };
 
     function getCurrentPositionMs() {
@@ -307,7 +387,7 @@
 
     async function startGame() {
       if (!deviceId) {
-        alert("Spotify player is not ready yet. Please wait a moment or verify your Spotify Premium account is active.");
+        alert("Spotify player is not ready yet. Check the debug box below for errors.");
         return;
       }
 
@@ -529,7 +609,6 @@
             }
           }, 100);
         } else {
-          // Line fully solved! Clear options and let the song keep playing seamlessly without network delays.
           isWaitingForAnswer = false;
           document.getElementById('options-container').innerHTML = '';
           if (!loopInterval) loopInterval = setInterval(gameLoop, 100);
